@@ -26,7 +26,11 @@ import sys
 import time
 from urllib.parse import urljoin
 
-from playwright.sync_api import sync_playwright, TimeoutError as PWTimeoutError
+from playwright.sync_api import (
+    sync_playwright,
+    Error as PWError,
+    TimeoutError as PWTimeoutError,
+)
 
 DEFAULT_URL = "https://x.alibaba.com/B2BRxB?ck=minisite"
 
@@ -296,6 +300,22 @@ def deduplicate(products):
     return unique
 
 
+def _best_effort_debug_dump(page):
+    """Try to save whatever HTML/screenshot the browser currently has. Never raises."""
+    try:
+        html = page.content()  # fetch first; don't create the file if this fails
+        with open(HTML_FILE, "w", encoding="utf-8") as fh:
+            fh.write(html)
+        print(f"  wrote partial debug HTML -> {HTML_FILE}")
+    except Exception as exc:
+        print(f"  (could not save debug HTML: {exc})")
+    try:
+        page.screenshot(path=PNG_FILE)
+        print(f"  wrote debug screenshot -> {PNG_FILE}")
+    except Exception as exc:
+        print(f"  (could not save screenshot: {exc})")
+
+
 def save_csv(products, path):
     with open(path, "w", newline="", encoding="utf-8-sig") as fh:
         writer = csv.DictWriter(fh, fieldnames=FIELDNAMES)
@@ -333,10 +353,37 @@ def main():
         page = context.new_page()
 
         print("Opening page (following redirects automatically)...")
+        navigated = False
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            navigated = True
         except PWTimeoutError:
+            # DOM didn't finish in time, but something may have loaded — keep going.
             print("Initial navigation timed out; continuing with whatever loaded.")
+            navigated = True
+        except PWError as exc:
+            # Connection-level failure (DNS, proxy/tunnel, refused, blocked, ...).
+            # The page never loaded, so extraction is impossible. Diagnose and
+            # bail out cleanly instead of crashing with a raw traceback.
+            msg = str(exc)
+            print(f"\n[!] Navigation failed — the page could not be loaded:\n    {msg}")
+            if "ERR_TUNNEL_CONNECTION_FAILED" in msg or "ERR_PROXY" in msg:
+                print(
+                    "    This is a proxy/tunnel rejection: outbound network access to\n"
+                    "    the target host is being blocked (e.g. a firewall/egress policy\n"
+                    "    returning 403 to the CONNECT). This is NOT something the scraper\n"
+                    "    can work around. Run it on a network that can reach the host."
+                )
+            elif "ERR_NAME_NOT_RESOLVED" in msg:
+                print("    DNS resolution failed — check the URL and your network/DNS.")
+            elif "ERR_INTERNET_DISCONNECTED" in msg or "ERR_CONNECTION" in msg:
+                print("    No usable network connection to the target host.")
+            # Best-effort: save whatever the browser has, for debugging.
+            _best_effort_debug_dump(page)
+            print("\nNo page content was loaded; not writing a product CSV.")
+            print("Found 0 products.")
+            browser.close()
+            sys.exit(2)
 
         # Follow-up wait for the minisite to settle.
         try:
