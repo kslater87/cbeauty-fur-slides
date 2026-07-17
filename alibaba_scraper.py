@@ -20,6 +20,7 @@ Outputs:
 """
 
 import csv
+import os
 import re
 import sys
 import time
@@ -307,11 +308,19 @@ def main():
     url = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_URL
     print(f"Target URL: {url}")
 
+    # Optional override for the Chromium binary. Useful on servers/CI where a
+    # Chromium is pre-installed at a path that doesn't match Playwright's
+    # bundled version (set PLAYWRIGHT_CHROMIUM_EXECUTABLE to that binary).
+    exe_path = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE") or None
+
     with sync_playwright() as p:
-        browser = p.chromium.launch(
+        launch_kwargs = dict(
             headless=False,  # visible browser as required
             args=["--disable-blink-features=AutomationControlled", "--start-maximized"],
         )
+        if exe_path:
+            launch_kwargs["executable_path"] = exe_path
+        browser = p.chromium.launch(**launch_kwargs)
         context = browser.new_context(
             viewport=None,  # use full window
             user_agent=(
