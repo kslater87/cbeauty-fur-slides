@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Playwright scraper outputs
+alibaba_products.csv
+alibaba_page.html
+alibaba_page.png
